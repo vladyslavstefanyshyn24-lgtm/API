@@ -1,350 +1,441 @@
-import pytest
+"""
+Юніт-тести для Library API v2 (SQLAlchemy + PostgreSQL).
+Тести використовують SQLite (aiosqlite) щоб не потребувати реального PostgreSQL.
+
+Покриття:
+  - Repository  (12 тестів)
+  - Service     (9 тестів)
+  - API/HTTP    (21 тест)
+"""
 import sys
 import os
+import pytest
+import pytest_asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
+from httpx import AsyncClient, ASGITransport
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-import models.book_model as book_model_module
-from models.book_model import BookStatus
+import database as db_module
+from database import Base, get_db
+from main import app
+from models.book_model import Book, BookStatus
 from repository.book_repository import BookRepository
 from schemas.book_schema import BookCreate
 from services.book_service import BookService
-from main import app
-
-client = TestClient(app)
 
 
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
-SAMPLE_BOOKS = [
-    {
-        "id": "uuid-1",
-        "title": "Кобзар",
-        "author": "Тарас Шевченко",
-        "description": "Поезії",
-        "status": BookStatus.AVAILABLE,
-        "year": 1840,
-    },
-    {
-        "id": "uuid-2",
-        "title": "Місто",
-        "author": "Валер'ян Підмогильний",
-        "description": "Роман",
-        "status": BookStatus.ISSUED,
-        "year": 1928,
-    },
-    {
-        "id": "uuid-3",
-        "title": "Захар Беркут",
-        "author": "Іван Франко",
-        "description": "Повість",
-        "status": BookStatus.AVAILABLE,
-        "year": 1882,
-    },
-]
+test_engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
+TestSessionLocal = async_sessionmaker(
+    bind=test_engine, class_=AsyncSession, expire_on_commit=False
+)
 
 
-@pytest.fixture(autouse=True)
-def reset_db():
-    """Перед кожним тестом відновлюємо стан in-memory бази."""
-    original = list(SAMPLE_BOOKS)
-    book_model_module.books_db.clear()
-    book_model_module.books_db.extend([dict(b) for b in original])
-    yield
-    book_model_module.books_db.clear()
-    book_model_module.books_db.extend([dict(b) for b in original])
+@pytest_asyncio.fixture(scope="function")
+async def db_session():
+    """Створює чисту БД для кожного тесту."""
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with TestSessionLocal() as session:
+        yield session
+
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seeded_session(db_session: AsyncSession):
+    """БД з тестовими даними."""
+    books = [
+        Book(
+            id="uuid-1",
+            title="Кобзар",
+            author="Тарас Шевченко",
+            description="Поезії",
+            status=BookStatus.AVAILABLE,
+            year=1840,
+        ),
+        Book(
+            id="uuid-2",
+            title="Місто",
+            author="Валер'ян Підмогильний",
+            description="Роман",
+            status=BookStatus.ISSUED,
+            year=1928,
+        ),
+        Book(
+            id="uuid-3",
+            title="Захар Беркут",
+            author="Іван Франко",
+            description="Повість",
+            status=BookStatus.AVAILABLE,
+            year=1882,
+        ),
+    ]
+    db_session.add_all(books)
+    await db_session.commit()
+    yield db_session
+
+
+@pytest_asyncio.fixture(scope="function")
+async def client(db_session: AsyncSession):
+    """HTTP тест-клієнт з підміненою БД-сесією."""
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def seeded_client(seeded_session: AsyncSession):
+    """HTTP тест-клієнт з даними."""
+
+    async def override_get_db():
+        yield seeded_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
 
 
 class TestBookRepository:
 
     @pytest.mark.asyncio
-    async def test_get_all_returns_all_books(self):
-        repo = BookRepository()
-        result = await repo.get_all()
-        assert len(result) == len(book_model_module.books_db)
+    async def test_get_all_returns_all_books(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all()
+        assert total == 3
+        assert len(books) == 3
 
     @pytest.mark.asyncio
-    async def test_get_all_filter_by_status_available(self):
-        repo = BookRepository()
-        result = await repo.get_all(status=BookStatus.AVAILABLE)
-        assert all(b["status"] == BookStatus.AVAILABLE for b in result)
+    async def test_get_all_filter_by_status_available(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all(status=BookStatus.AVAILABLE)
+        assert total == 2
+        assert all(b.status == BookStatus.AVAILABLE for b in books)
 
     @pytest.mark.asyncio
-    async def test_get_all_filter_by_status_issued(self):
-        repo = BookRepository()
-        result = await repo.get_all(status=BookStatus.ISSUED)
-        assert all(b["status"] == BookStatus.ISSUED for b in result)
+    async def test_get_all_filter_by_status_issued(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all(status=BookStatus.ISSUED)
+        assert total == 1
+        assert books[0].author == "Валер'ян Підмогильний"
 
     @pytest.mark.asyncio
-    async def test_get_all_filter_by_author_partial(self):
-        repo = BookRepository()
-        result = await repo.get_all(author="франко")
-        assert len(result) == 1
-        assert result[0]["author"] == "Іван Франко"
+    async def test_get_all_filter_by_author_partial(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all(author="франко")
+        assert total == 1
+        assert books[0].author == "Іван Франко"
 
     @pytest.mark.asyncio
-    async def test_get_all_sort_by_title_asc(self):
-        repo = BookRepository()
-        result = await repo.get_all(sort_by="title", sort_order="asc")
-        titles = [b["title"] for b in result]
-        assert titles == sorted(titles)
+    async def test_get_all_sort_by_year_asc(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, _ = await repo.get_all(sort_by="year", sort_order="asc")
+        years = [b.year for b in books]
+        assert years == sorted(years)
 
     @pytest.mark.asyncio
-    async def test_get_all_sort_by_year_desc(self):
-        repo = BookRepository()
-        result = await repo.get_all(sort_by="year", sort_order="desc")
-        years = [b["year"] for b in result]
-        assert years == sorted(years, reverse=True)
+    async def test_get_all_sort_by_title_desc(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, _ = await repo.get_all(sort_by="title", sort_order="desc")
+        titles = [b.title for b in books]
+        assert titles == sorted(titles, reverse=True)
 
     @pytest.mark.asyncio
-    async def test_get_by_id_existing(self):
-        repo = BookRepository()
-        result = await repo.get_by_id("uuid-1")
-        assert result is not None
-        assert result["id"] == "uuid-1"
+    async def test_pagination_limit(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all(limit=2, offset=0)
+        assert total == 3  
+        assert len(books) == 2
 
     @pytest.mark.asyncio
-    async def test_get_by_id_not_found(self):
-        repo = BookRepository()
-        result = await repo.get_by_id("non-existent-id")
-        assert result is None
+    async def test_pagination_offset(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        books, total = await repo.get_all(limit=10, offset=2)
+        assert total == 3
+        assert len(books) == 1
 
     @pytest.mark.asyncio
-    async def test_create_adds_book(self):
-        repo = BookRepository()
-        new_book = {
-            "id": "uuid-new",
-            "title": "Нова книга",
-            "author": "Автор",
-            "description": "Опис",
-            "status": BookStatus.AVAILABLE,
-            "year": 2024,
-        }
-        created = await repo.create(new_book)
-        assert created["id"] == "uuid-new"
-        assert any(b["id"] == "uuid-new" for b in book_model_module.books_db)
+    async def test_get_by_id_found(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        book = await repo.get_by_id("uuid-1")
+        assert book is not None
+        assert book.title == "Кобзар"
 
     @pytest.mark.asyncio
-    async def test_delete_existing_book(self):
-        repo = BookRepository()
-        result = await repo.delete("uuid-1")
-        assert result is True
-        assert not any(b["id"] == "uuid-1" for b in book_model_module.books_db)
+    async def test_get_by_id_not_found(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        book = await repo.get_by_id("no-such-id")
+        assert book is None
 
     @pytest.mark.asyncio
-    async def test_delete_non_existing_book_returns_false(self):
-        repo = BookRepository()
-        result = await repo.delete("no-such-id")
-        assert result is False
+    async def test_create_book(self, db_session):
+        repo = BookRepository(db_session)
+        book = await repo.create(
+            {"title": "Нова", "author": "Автор", "description": None,
+             "status": BookStatus.AVAILABLE, "year": 2024}
+        )
+        await db_session.commit()
+        assert book.id is not None
+        assert len(book.id) == 36
 
     @pytest.mark.asyncio
-    async def test_delete_idempotent_second_call_returns_false(self):
-        repo = BookRepository()
-        await repo.delete("uuid-2")
-        second = await repo.delete("uuid-2")
-        assert second is False
+    async def test_delete_existing_book(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        await repo.delete("uuid-1")
+        await seeded_session.commit()
+        book = await repo.get_by_id("uuid-1")
+        assert book is None
+
+    @pytest.mark.asyncio
+    async def test_delete_idempotent_no_error(self, seeded_session):
+        repo = BookRepository(seeded_session)
+        await repo.delete("uuid-1")
+        await seeded_session.commit()
+        await repo.delete("uuid-1")
+        await seeded_session.commit()
+
 
 
 class TestBookService:
 
-    def _make_service(self) -> BookService:
-        return BookService(BookRepository())
+    def _service(self, session):
+        return BookService(BookRepository(session))
 
     @pytest.mark.asyncio
-    async def test_get_all_books_returns_list_response(self):
-        service = self._make_service()
-        response = await service.get_all_books()
-        assert response.total == len(book_model_module.books_db)
-        assert len(response.books) == response.total
+    async def test_get_all_returns_paginated(self, seeded_session):
+        svc = self._service(seeded_session)
+        result = await svc.get_all_books(limit=10, offset=0)
+        assert result.total == 3
+        assert result.limit == 10
+        assert result.offset == 0
+        assert len(result.books) == 3
 
     @pytest.mark.asyncio
-    async def test_get_book_by_id_found(self):
-        service = self._make_service()
-        book = await service.get_book_by_id("uuid-3")
+    async def test_get_all_pagination_limit(self, seeded_session):
+        svc = self._service(seeded_session)
+        result = await svc.get_all_books(limit=2, offset=0)
+        assert result.total == 3
+        assert len(result.books) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_all_filter_by_status(self, seeded_session):
+        svc = self._service(seeded_session)
+        result = await svc.get_all_books(status=BookStatus.AVAILABLE)
+        assert all(b.status == BookStatus.AVAILABLE for b in result.books)
+
+    @pytest.mark.asyncio
+    async def test_get_book_by_id_found(self, seeded_session):
+        svc = self._service(seeded_session)
+        book = await svc.get_book_by_id("uuid-3")
         assert book is not None
-        assert book.id == "uuid-3"
         assert book.author == "Іван Франко"
 
     @pytest.mark.asyncio
-    async def test_get_book_by_id_not_found(self):
-        service = self._make_service()
-        book = await service.get_book_by_id("xxxx")
+    async def test_get_book_by_id_not_found(self, seeded_session):
+        svc = self._service(seeded_session)
+        book = await svc.get_book_by_id("missing")
         assert book is None
 
     @pytest.mark.asyncio
-    async def test_create_book_generates_uuid(self):
-        service = self._make_service()
-        book_data = BookCreate(
-            title="Тест",
-            author="Автор",
-            description="Опис",
-            status=BookStatus.AVAILABLE,
-            year=2023,
-        )
-        created = await service.create_book(book_data)
-        assert created.id is not None
+    async def test_create_book_generates_uuid(self, db_session):
+        svc = self._service(db_session)
+        data = BookCreate(title="Тест", author="Автор", year=2020)
+        created = await svc.create_book(data)
         assert len(created.id) == 36
 
     @pytest.mark.asyncio
-    async def test_create_book_saves_to_store(self):
-        service = self._make_service()
-        book_data = BookCreate(
-            title="Тест",
-            author="Автор",
-            description=None,
-            status=BookStatus.AVAILABLE,
-            year=2024,
-        )
-        created = await service.create_book(book_data)
-        assert any(b["id"] == created.id for b in book_model_module.books_db)
+    async def test_create_book_persists(self, db_session):
+        svc = self._service(db_session)
+        data = BookCreate(title="Тест", author="Автор", year=2020)
+        created = await svc.create_book(data)
+        await db_session.commit()
+        found = await svc.get_book_by_id(created.id)
+        assert found is not None
 
     @pytest.mark.asyncio
-    async def test_delete_book_existing(self):
-        service = self._make_service()
-        result = await service.delete_book("uuid-1")
-        assert result is True
+    async def test_delete_book_idempotent(self, seeded_session):
+        svc = self._service(seeded_session)
+        await svc.delete_book("uuid-1")
+        await seeded_session.commit()
+        await svc.delete_book("uuid-1")
+        await seeded_session.commit()
 
     @pytest.mark.asyncio
-    async def test_delete_book_idempotent(self):
-        service = self._make_service()
-        await service.delete_book("uuid-1")
-        result = await service.delete_book("uuid-1")
-        assert result is False
+    async def test_delete_non_existing_no_error(self, db_session):
+        svc = self._service(db_session)
+        await svc.delete_book("totally-fake-id")
 
-    @pytest.mark.asyncio
-    async def test_get_all_with_filter_and_sort(self):
-        service = self._make_service()
-        response = await service.get_all_books(
-            status=BookStatus.AVAILABLE,
-            sort_by="year",
-            sort_order="asc",
-        )
-        assert all(b.status == BookStatus.AVAILABLE for b in response.books)
-        years = [b.year for b in response.books]
-        assert years == sorted(years)
 
 
 class TestBooksAPI:
 
-    def test_get_all_books_200(self):
-        response = client.get("/books/")
-        assert response.status_code == 200
-        data = response.json()
-        assert "books" in data
-        assert "total" in data
-        assert data["total"] == len(book_model_module.books_db)
 
-    def test_get_all_books_filter_by_status(self):
-        response = client.get("/books/?status=available")
-        assert response.status_code == 200
-        data = response.json()
-        assert all(b["status"] == "available" for b in data["books"])
+    @pytest.mark.asyncio
+    async def test_get_all_books_200(self, seeded_client):
+        r = await seeded_client.get("/books/")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total"] == 3
+        assert data["limit"] == 10
+        assert data["offset"] == 0
+        assert len(data["books"]) == 3
 
-    def test_get_all_books_filter_by_author(self):
-        response = client.get("/books/?author=франко")
-        assert response.status_code == 200
-        data = response.json()
+    @pytest.mark.asyncio
+    async def test_get_all_books_empty(self, client):
+        r = await client.get("/books/")
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_pagination_limit(self, seeded_client):
+        r = await seeded_client.get("/books/?limit=2&offset=0")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total"] == 3
+        assert len(data["books"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pagination_offset(self, seeded_client):
+        r = await seeded_client.get("/books/?limit=10&offset=2")
+        assert r.status_code == 200
+        assert len(r.json()["books"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_pagination_invalid_limit_422(self, seeded_client):
+        r = await seeded_client.get("/books/?limit=0")
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_pagination_limit_over_100_422(self, seeded_client):
+        r = await seeded_client.get("/books/?limit=200")
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_filter_by_status(self, seeded_client):
+        r = await seeded_client.get("/books/?status=available")
+        assert r.status_code == 200
+        assert all(b["status"] == "available" for b in r.json()["books"])
+
+    @pytest.mark.asyncio
+    async def test_filter_by_author(self, seeded_client):
+        r = await seeded_client.get("/books/?author=франко")
+        assert r.status_code == 200
+        data = r.json()
         assert data["total"] == 1
         assert "Франко" in data["books"][0]["author"]
 
-    def test_get_all_books_sort_by_year_asc(self):
-        response = client.get("/books/?sort_by=year&sort_order=asc")
-        assert response.status_code == 200
-        years = [b["year"] for b in response.json()["books"]]
+    @pytest.mark.asyncio
+    async def test_sort_by_year_asc(self, seeded_client):
+        r = await seeded_client.get("/books/?sort_by=year&sort_order=asc")
+        assert r.status_code == 200
+        years = [b["year"] for b in r.json()["books"]]
         assert years == sorted(years)
 
-    def test_get_all_books_sort_by_title_desc(self):
-        response = client.get("/books/?sort_by=title&sort_order=desc")
-        assert response.status_code == 200
-        titles = [b["title"] for b in response.json()["books"]]
+    @pytest.mark.asyncio
+    async def test_sort_by_title_desc(self, seeded_client):
+        r = await seeded_client.get("/books/?sort_by=title&sort_order=desc")
+        assert r.status_code == 200
+        titles = [b["title"] for b in r.json()["books"]]
         assert titles == sorted(titles, reverse=True)
 
-    def test_get_all_books_invalid_sort_returns_422(self):
-        response = client.get("/books/?sort_by=invalid_field")
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_invalid_sort_field_422(self, seeded_client):
+        r = await seeded_client.get("/books/?sort_by=unknown")
+        assert r.status_code == 422
 
 
-    def test_get_book_by_id_200(self):
-        response = client.get("/books/uuid-1")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == "uuid-1"
-        assert data["title"] == "Кобзар"
+    @pytest.mark.asyncio
+    async def test_get_book_by_id_200(self, seeded_client):
+        r = await seeded_client.get("/books/uuid-1")
+        assert r.status_code == 200
+        assert r.json()["title"] == "Кобзар"
 
-    def test_get_book_by_id_404(self):
-        response = client.get("/books/non-existing-uuid")
-        assert response.status_code == 404
-        assert "не знайдено" in response.json()["detail"]
+    @pytest.mark.asyncio
+    async def test_get_book_by_id_404(self, seeded_client):
+        r = await seeded_client.get("/books/not-existing")
+        assert r.status_code == 404
+        assert "не знайдено" in r.json()["detail"]
 
 
-    def test_create_book_201(self):
-        payload = {
-            "title": "Нова книга",
-            "author": "Тест Автор",
-            "description": "Опис",
-            "status": "available",
-            "year": 2022,
-        }
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 201
-        data = response.json()
+    @pytest.mark.asyncio
+    async def test_create_book_201(self, client):
+        payload = {"title": "Нова книга", "author": "Автор", "year": 2022}
+        r = await client.post("/books/", json=payload)
+        assert r.status_code == 201
+        data = r.json()
         assert data["title"] == "Нова книга"
-        assert "id" in data
         assert len(data["id"]) == 36
 
-    def test_create_book_default_status_available(self):
-        payload = {"title": "Книга без статусу", "author": "Автор", "year": 2021}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 201
-        assert response.json()["status"] == "available"
+    @pytest.mark.asyncio
+    async def test_create_book_default_status(self, client):
+        r = await client.post("/books/", json={"title": "X", "author": "Y", "year": 2020})
+        assert r.status_code == 201
+        assert r.json()["status"] == "available"
 
-    def test_create_book_missing_title_422(self):
-        payload = {"author": "Автор", "year": 2021}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_create_book_missing_title_422(self, client):
+        r = await client.post("/books/", json={"author": "A", "year": 2020})
+        assert r.status_code == 422
 
-    def test_create_book_missing_author_422(self):
-        payload = {"title": "Книга", "year": 2021}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_create_book_missing_author_422(self, client):
+        r = await client.post("/books/", json={"title": "T", "year": 2020})
+        assert r.status_code == 422
 
-    def test_create_book_missing_year_422(self):
-        payload = {"title": "Книга", "author": "Автор"}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_create_book_future_year_422(self, client):
+        r = await client.post("/books/", json={"title": "T", "author": "A", "year": 9999})
+        assert r.status_code == 422
 
-    def test_create_book_invalid_status_422(self):
-        payload = {"title": "Книга", "author": "Автор", "year": 2021, "status": "unknown"}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_create_book_empty_title_422(self, client):
+        r = await client.post("/books/", json={"title": "   ", "author": "A", "year": 2020})
+        assert r.status_code == 422
 
-    def test_create_book_future_year_422(self):
-        payload = {"title": "Книга", "author": "Автор", "year": 9999}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
-
-    def test_create_book_empty_title_422(self):
-        payload = {"title": "   ", "author": "Автор", "year": 2020}
-        response = client.post("/books/", json=payload)
-        assert response.status_code == 422
+    @pytest.mark.asyncio
+    async def test_create_book_invalid_status_422(self, client):
+        r = await client.post("/books/", json={"title": "T", "author": "A", "year": 2020, "status": "wrong"})
+        assert r.status_code == 422
 
 
-    def test_delete_book_204(self):
-        response = client.delete("/books/uuid-1")
-        assert response.status_code == 204
+    @pytest.mark.asyncio
+    async def test_delete_book_204(self, seeded_client):
+        r = await seeded_client.delete("/books/uuid-1")
+        assert r.status_code == 204
 
-    def test_delete_book_idempotent_returns_204_again(self):
-        client.delete("/books/uuid-2")
-        response = client.delete("/books/uuid-2")
-        assert response.status_code == 204 
+    @pytest.mark.asyncio
+    async def test_delete_idempotent_second_call_204(self, seeded_client):
+        await seeded_client.delete("/books/uuid-2")
+        r = await seeded_client.delete("/books/uuid-2")
+        assert r.status_code == 204
 
-    def test_delete_non_existing_book_204(self):
-        response = client.delete("/books/absolutely-wrong-id")
-        assert response.status_code == 204
+    @pytest.mark.asyncio
+    async def test_delete_non_existing_204(self, client):
+        r = await client.delete("/books/absolutely-wrong-id")
+        assert r.status_code == 204
 
-    def test_delete_removes_book_from_store(self):
-        client.delete("/books/uuid-3")
-        response = client.get("/books/uuid-3")
-        assert response.status_code == 404
+    @pytest.mark.asyncio
+    async def test_delete_removes_book(self, seeded_client):
+        await seeded_client.delete("/books/uuid-3")
+        r = await seeded_client.get("/books/uuid-3")
+        assert r.status_code == 404

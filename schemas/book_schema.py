@@ -13,7 +13,7 @@ class BookCreate(BaseModel):
 
     @field_validator("title", "author")
     @classmethod
-    def strip_whitespace(cls, v: str) -> str:
+    def strip_and_validate(cls, v: str) -> str:
         v = v.strip()
         if not v:
             raise ValueError("Поле не може бути порожнім або складатися лише з пробілів")
@@ -22,11 +22,11 @@ class BookCreate(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {
-                "title": "Назва книги",
-                "author": "Ім'я Автора",
-                "description": "Короткий опис книги.",
+                "title": "Кобзар",
+                "author": "Тарас Шевченко",
+                "description": "Збірка поезій",
                 "status": "available",
-                "year": 2020,
+                "year": 1840,
             }
         }
     }
@@ -43,6 +43,8 @@ class BookResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class BookListResponse(BaseModel):
+class PaginatedBooksResponse(BaseModel):
     total: int
+    limit: int
+    offset: int
     books: list[BookResponse]

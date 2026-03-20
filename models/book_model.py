@@ -1,34 +1,28 @@
-from enum import Enum
-from typing import List, Dict
+import uuid
+import enum
+from sqlalchemy import String, Integer, Enum as SAEnum, Text
+from sqlalchemy.orm import Mapped, mapped_column
+from database import Base
 
-class BookStatus(str, Enum):
+
+class BookStatus(str, enum.Enum):
     AVAILABLE = "available"
     ISSUED = "issued"
 
 
-books_db: List[Dict] = [
-    {
-        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        "title": "Кобзар",
-        "author": "Тарас Шевченко",
-        "description": "Збірка поетичних творів Тараса Шевченка.",
-        "status": BookStatus.AVAILABLE,
-        "year": 1840,
-    },
-    {
-        "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-        "title": "Тіні забутих предків",
-        "author": "Михайло Коцюбинський",
-        "description": "Повість про гуцульське життя та кохання.",
-        "status": BookStatus.ISSUED,
-        "year": 1911,
-    },
-    {
-        "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
-        "title": "Місто",
-        "author": "Валер'ян Підмогильний",
-        "description": "Роман про молодого українця, який приїжджає до Києва.",
-        "status": BookStatus.AVAILABLE,
-        "year": 1928,
-    },
-]
+class Book(Base):
+    __tablename__ = "books"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    author: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[BookStatus] = mapped_column(
+        SAEnum(BookStatus), nullable=False, default=BookStatus.AVAILABLE
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<Book id={self.id} title={self.title!r}>"
