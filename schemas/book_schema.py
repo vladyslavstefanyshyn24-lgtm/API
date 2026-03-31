@@ -43,8 +43,14 @@ class BookResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class PaginatedBooksResponse(BaseModel):
-    total: int
+class CursorPaginatedBooksResponse(BaseModel):
+    """
+    Cursor-based пагінація.
+    next_cursor — ID останньої книги на сторінці.
+    Передай його як ?cursor= у наступному запиті.
+    Якщо next_cursor == null — більше сторінок немає.
+    """
+    items: list[BookResponse]
+    next_cursor: Optional[str]
     limit: int
-    offset: int
-    books: list[BookResponse]
+    has_more: bool
