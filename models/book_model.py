@@ -1,8 +1,7 @@
-import uuid
 import enum
-from sqlalchemy import String, Integer, Enum as SAEnum, Text
-from sqlalchemy.orm import Mapped, mapped_column
-from database import Base
+from typing import Optional
+from pydantic import BaseModel, Field
+from pydantic_mongo import PydanticObjectId
 
 
 class BookStatus(str, enum.Enum):
@@ -10,19 +9,14 @@ class BookStatus(str, enum.Enum):
     ISSUED = "issued"
 
 
-class Book(Base):
-    __tablename__ = "books"
+class BookDocument(BaseModel):
+    """Represents a book document as stored in MongoDB."""
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    author: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[BookStatus] = mapped_column(
-        SAEnum(BookStatus), nullable=False, default=BookStatus.AVAILABLE
-    )
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    id: Optional[PydanticObjectId] = Field(None, alias="_id")
+    title: str
+    author: str
+    description: Optional[str] = None
+    status: BookStatus = BookStatus.AVAILABLE
+    year: int
 
-    def __repr__(self) -> str:
-        return f"<Book id={self.id} title={self.title!r}>"
+    model_config = {"populate_by_name": True}

@@ -1,38 +1,20 @@
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
+import motor.motor_asyncio
 from config import settings
 
-
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
-
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+client: motor.motor_asyncio.AsyncIOMotorClient | None = None
 
 
-class Base(DeclarativeBase):
-    pass
+def get_client() -> motor.motor_asyncio.AsyncIOMotorClient:
+    return motor.motor_asyncio.AsyncIOMotorClient(settings.MONGO_URL)
 
 
-async def get_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+def get_database(mongo_client: motor.motor_asyncio.AsyncIOMotorClient | None = None):
+    """Return the library database from the given client (or global client)."""
+    c = mongo_client or client
+    return c[settings.MONGO_DB]
 
 
-async def create_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
-async def drop_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+async def get_books_collection(mongo_client=None):
+    """FastAPI dependency — yields the books collection."""
+    db = get_database(mongo_client)
+    yield db["books"]

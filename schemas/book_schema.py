@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
-from models.book_model import BookStatus
 from datetime import datetime
+from models.book_model import BookStatus
 
 
 class BookCreate(BaseModel):
@@ -40,17 +40,15 @@ class BookResponse(BaseModel):
     status: BookStatus
     year: int
 
-    model_config = {"from_attributes": True}
 
-
-class CursorPaginatedBooksResponse(BaseModel):
+class PaginatedBooksResponse(BaseModel):
     """
-    Cursor-based пагінація.
-    next_cursor — ID останньої книги на сторінці.
-    Передай його як ?cursor= у наступному запиті.
-    Якщо next_cursor == null — більше сторінок немає.
+    Limit-Offset пагінація.
+    Передавай ?limit=10&offset=0 для першої сторінки,
+    ?limit=10&offset=10 для другої і т.д.
     """
     items: list[BookResponse]
-    next_cursor: Optional[str]
+    total: int
     limit: int
+    offset: int
     has_more: bool
