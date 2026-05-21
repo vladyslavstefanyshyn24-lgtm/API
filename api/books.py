@@ -1,6 +1,6 @@
 from typing import Optional, Literal
 
-from fastapi import APIRouter, HTTPException, status, Query, Depends
+from fastapi import APIRouter, HTTPException, status, Query, Depends, Request
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from database import get_books_collection
@@ -9,6 +9,7 @@ from repository.book_repository import BookRepository
 from schemas.book_schema import BookCreate, BookResponse, PaginatedBooksResponse
 from services.book_service import BookService
 from auth_utils import get_current_user
+from rate_limiter import rate_limit
 
 router = APIRouter()
 
@@ -33,6 +34,7 @@ def get_book_service(
     ),
 )
 async def get_all_books(
+    request: Request,
     status_filter: Optional[BookStatus] = Query(None, alias="status"),
     author: Optional[str] = Query(None),
     sort_by: Optional[Literal["title", "year"]] = Query(None),
@@ -42,6 +44,7 @@ async def get_all_books(
     service: BookService = Depends(get_book_service),
     current_user: dict = Depends(get_current_user),   # 🔒
 ):
+    await rate_limit(request, user_id=current_user.get("user_id"))
     return await service.get_all_books(
         status=status_filter,
         author=author,
@@ -61,9 +64,11 @@ async def get_all_books(
 )
 async def get_book_by_id(
     book_id: str,
+    request: Request,
     service: BookService = Depends(get_book_service),
     current_user: dict = Depends(get_current_user),   # 🔒
 ):
+    await rate_limit(request, user_id=current_user.get("user_id"))
     book = await service.get_book_by_id(book_id)
     if book is None:
         raise HTTPException(
@@ -81,9 +86,11 @@ async def get_book_by_id(
 )
 async def create_book(
     book_data: BookCreate,
+    request: Request,
     service: BookService = Depends(get_book_service),
     current_user: dict = Depends(get_current_user),   # 🔒
 ):
+    await rate_limit(request, user_id=current_user.get("user_id"))
     return await service.create_book(book_data)
 
 
@@ -94,8 +101,10 @@ async def create_book(
 )
 async def delete_book(
     book_id: str,
+    request: Request,
     service: BookService = Depends(get_book_service),
     current_user: dict = Depends(get_current_user),   # 🔒
 ):
+    await rate_limit(request, user_id=current_user.get("user_id"))
     await service.delete_book(book_id)
     return None
