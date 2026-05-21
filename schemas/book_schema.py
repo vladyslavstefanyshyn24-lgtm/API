@@ -42,11 +42,6 @@ class BookResponse(BaseModel):
 
 
 class PaginatedBooksResponse(BaseModel):
-    """
-    Limit-Offset пагінація.
-    Передавай ?limit=10&offset=0 для першої сторінки,
-    ?limit=10&offset=10 для другої і т.д.
-    """
     items: list[BookResponse]
     total: int
     limit: int

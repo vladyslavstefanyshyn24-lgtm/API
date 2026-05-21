@@ -47,11 +47,7 @@ class BookRepository:
         limit: int = 10,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
-        """
-        Returns (books, total).
-        `total` is the total number of matching documents (ignoring pagination),
-        used by the caller to compute `has_more`.
-        """
+
         query = _build_filter(status, author)
         sort = _build_sort(sort_by, sort_order)
 
