@@ -8,6 +8,7 @@ from models.book_model import BookStatus
 from repository.book_repository import BookRepository
 from schemas.book_schema import BookCreate, BookResponse, PaginatedBooksResponse
 from services.book_service import BookService
+from auth_utils import get_current_user
 
 router = APIRouter()
 
@@ -27,7 +28,8 @@ def get_book_service(
         "Повертає сторінку книг. "
         "Використовуй `limit` та `offset` для навігації між сторінками. "
         "Якщо `has_more=false` — сторінок більше немає. "
-        "Поле `total` містить загальну кількість записів."
+        "Поле `total` містить загальну кількість записів. "
+        "🔒 Потрібна автентифікація."
     ),
 )
 async def get_all_books(
@@ -38,6 +40,7 @@ async def get_all_books(
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0, description="Кількість записів, які потрібно пропустити"),
     service: BookService = Depends(get_book_service),
+    current_user: dict = Depends(get_current_user),   # 🔒
 ):
     return await service.get_all_books(
         status=status_filter,
@@ -54,9 +57,12 @@ async def get_all_books(
     response_model=BookResponse,
     status_code=status.HTTP_200_OK,
     responses={404: {"description": "Книгу не знайдено"}},
+    summary="Отримати книгу за ID 🔒",
 )
 async def get_book_by_id(
-    book_id: str, service: BookService = Depends(get_book_service)
+    book_id: str,
+    service: BookService = Depends(get_book_service),
+    current_user: dict = Depends(get_current_user),   # 🔒
 ):
     book = await service.get_book_by_id(book_id)
     if book is None:
@@ -67,16 +73,29 @@ async def get_book_by_id(
     return book
 
 
-@router.post("/", response_model=BookResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=BookResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Створити книгу 🔒",
+)
 async def create_book(
-    book_data: BookCreate, service: BookService = Depends(get_book_service)
+    book_data: BookCreate,
+    service: BookService = Depends(get_book_service),
+    current_user: dict = Depends(get_current_user),   # 🔒
 ):
     return await service.create_book(book_data)
 
 
-@router.delete("/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{book_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Видалити книгу 🔒",
+)
 async def delete_book(
-    book_id: str, service: BookService = Depends(get_book_service)
+    book_id: str,
+    service: BookService = Depends(get_book_service),
+    current_user: dict = Depends(get_current_user),   # 🔒
 ):
     await service.delete_book(book_id)
     return None
