@@ -1,0 +1,559 @@
+openapi: 3.0.3
+info:
+  title: Library API
+  description: REST API для управління бібліотекою книг (FastAPI + MongoDB + JWT).
+  version: 4.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: http://localhost:4010
+    description: Prism mock server
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    BookStatus:
+      type: string
+      enum:
+        - available
+        - issued
+      example: available
+
+    BookCreate:
+      type: object
+      required:
+        - title
+        - author
+        - year
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Кобзар
+        author:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Тарас Шевченко
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+          example: Збірка поезій
+        status:
+          $ref: '#/components/schemas/BookStatus'
+        year:
+          type: integer
+          minimum: 1
+          maximum: 2025
+          example: 1840
+
+    BookResponse:
+      type: object
+      required:
+        - id
+        - title
+        - author
+        - status
+        - year
+      properties:
+        id:
+          type: string
+          example: 507f1f77bcf86cd799439011
+        title:
+          type: string
+          example: Кобзар
+        author:
+          type: string
+          example: Тарас Шевченко
+        description:
+          type: string
+          nullable: true
+          example: Збірка поезій
+        status:
+          $ref: '#/components/schemas/BookStatus'
+        year:
+          type: integer
+          example: 1840
+
+    PaginatedBooksResponse:
+      type: object
+      required:
+        - items
+        - total
+        - limit
+        - offset
+        - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookResponse'
+        total:
+          type: integer
+          example: 42
+        limit:
+          type: integer
+          example: 10
+        offset:
+          type: integer
+          example: 0
+        has_more:
+          type: boolean
+          example: true
+
+    UserRegister:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: john_doe
+        password:
+          type: string
+          example: secret123
+
+    UserLogin:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: john_doe
+        password:
+          type: string
+          example: secret123
+
+    TokenResponse:
+      type: object
+      required:
+        - access_token
+        - refresh_token
+        - token_type
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqb2huX2RvZSJ9.abc123
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqb2huX2RvZSJ9.xyz789
+        token_type:
+          type: string
+          example: bearer
+
+    RefreshRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqb2huX2RvZSJ9.xyz789
+
+    AccessTokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqb2huX2RvZSJ9.newtoken
+        token_type:
+          type: string
+          example: bearer
+
+    UserResponse:
+      type: object
+      required:
+        - id
+        - username
+      properties:
+        id:
+          type: string
+          example: 507f1f77bcf86cd799439011
+        username:
+          type: string
+          example: john_doe
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+
+paths:
+
+  # ── Root ──────────────────────────────────────────────────────────────────
+
+  /:
+    get:
+      tags:
+        - root
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: API is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Library API v4 is running 📚 (MongoDB + JWT)
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      tags:
+        - auth
+      summary: Реєстрація нового користувача
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+      responses:
+        '201':
+          description: Користувача створено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '409':
+          description: Користувач вже існує
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: "Користувач 'john_doe' вже існує"
+
+  /auth/login:
+    post:
+      tags:
+        - auth
+      summary: Отримати access + refresh токени
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLogin'
+      responses:
+        '200':
+          description: Токени видано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Невірний логін або пароль
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Невірний логін або пароль
+
+  /auth/refresh:
+    post:
+      tags:
+        - auth
+      summary: Оновити access token за допомогою refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Новий access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+        '401':
+          description: Невалідний або прострочений refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Refresh token has expired – please log in again
+
+  /auth/me:
+    get:
+      tags:
+        - auth
+      summary: Отримати інформацію про поточного користувача
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Дані поточного користувача
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Не авторизовано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Invalid access token
+
+  # ── Books ─────────────────────────────────────────────────────────────────
+
+  /books/:
+    get:
+      tags:
+        - books
+      summary: Отримати всі книги (Limit-Offset пагінація)
+      description: >
+        Повертає сторінку книг.
+        Використовуй `limit` та `offset` для навігації між сторінками.
+        Якщо `has_more=false` — сторінок більше немає.
+        Поле `total` містить загальну кількість записів.
+        🔒 Потрібна автентифікація.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/BookStatus'
+        - name: author
+          in: query
+          required: false
+          schema:
+            type: string
+            example: Шевченко
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - title
+              - year
+        - name: sort_order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - asc
+              - desc
+            default: asc
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: offset
+          in: query
+          required: false
+          description: Кількість записів, які потрібно пропустити
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Список книг з пагінацією
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedBooksResponse'
+              example:
+                items:
+                  - id: 507f1f77bcf86cd799439011
+                    title: Кобзар
+                    author: Тарас Шевченко
+                    description: Збірка поезій
+                    status: available
+                    year: 1840
+                  - id: 507f1f77bcf86cd799439012
+                    title: Захар Беркут
+                    author: Іван Франко
+                    description: Повість
+                    status: issued
+                    year: 1882
+                total: 2
+                limit: 10
+                offset: 0
+                has_more: false
+        '401':
+          description: Не авторизовано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Invalid access token
+        '429':
+          description: Забагато запитів
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Too many requests. Please try again later.
+
+    post:
+      tags:
+        - books
+      summary: Створити книгу 🔒
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookCreate'
+      responses:
+        '201':
+          description: Книгу створено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookResponse'
+              example:
+                id: 507f1f77bcf86cd799439013
+                title: Кобзар
+                author: Тарас Шевченко
+                description: Збірка поезій
+                status: available
+                year: 1840
+        '401':
+          description: Не авторизовано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: Помилка валідації
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '429':
+          description: Забагато запитів
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Too many requests. Please try again later.
+
+  /books/{book_id}:
+    get:
+      tags:
+        - books
+      summary: Отримати книгу за ID 🔒
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 507f1f77bcf86cd799439011
+      responses:
+        '200':
+          description: Книга знайдена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookResponse'
+              example:
+                id: 507f1f77bcf86cd799439011
+                title: Кобзар
+                author: Тарас Шевченко
+                description: Збірка поезій
+                status: available
+                year: 1840
+        '401':
+          description: Не авторизовано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '404':
+          description: Книгу не знайдено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: "Книгу з ID '507f1f77bcf86cd799439099' не знайдено"
+        '429':
+          description: Забагато запитів
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Too many requests. Please try again later.
+
+    delete:
+      tags:
+        - books
+      summary: Видалити книгу 🔒
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 507f1f77bcf86cd799439011
+      responses:
+        '204':
+          description: Книгу видалено (або не існувала)
+        '401':
+          description: Не авторизовано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '429':
+          description: Забагато запитів
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Too many requests. Please try again later.
